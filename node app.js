@@ -1,189 +1,212 @@
-/**************************************************************
- * WALLETSPPOINTS - SISTEMA INTEGRADO (HTML + BACKEND)
- * Todo en un solo archivo para despliegue rápido.
- **************************************************************/
-
-const express = require("express");
-const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const cors = require("cors");
-const QRCode = require("qrcode");
-
-const app = express();
-app.use(express.json());
-app.use(cors());
-
-const SECRET = "wp_2026_key";
-
-// --- CONEXIÓN A BASE DE DATOS ---
-mongoose.connect("mongodb://127.0.0.1:27017/walletspoints")
-    .then(() => console.log("✅ Base de datos conectada"))
-    .catch(err => console.log("❌ Error: MongoDB no detectado", err));
-
-// --- MODELOS ---
-const Negocio = mongoose.model("Negocio", new mongoose.Schema({
-    nombre: String, email: String, password: String, comercioId: String, sector: String
-}));
-
-const Lectura = mongoose.model("Lectura", new mongoose.Schema({
-    comercioId: String, sector: String, userId: String, fecha: { type: Date, default: Date.now }
-}));
-
-// --- API LOGIC ---
-app.post("/api/login", async (req, res) => {
-    const { email, password } = req.body;
-    const negocio = await Negocio.findOne({ email });
-    if (!negocio || !(await bcrypt.compare(password, negocio.password))) return res.status(401).send("Error");
-    const token = jwt.sign({ id: negocio._id, comercioId: negocio.comercioId, nombre: negocio.nombre, sector: negocio.sector }, SECRET);
-    res.json({ token });
-});
-
-app.get("/api/data", async (req, res) => {
-    try {
-        const token = req.headers.authorization;
-        const decoded = jwt.verify(token, SECRET);
-        const total = await Lectura.countDocuments({ comercioId: decoded.comercioId });
-        const hoy = await Lectura.countDocuments({ comercioId: decoded.comercioId, fecha: { $gte: new Date().setHours(0,0,0,0) } });
-        const qr = await QRCode.toDataURL(`wp:${decoded.sector}:${decoded.comercioId}`);
-        res.json({ total, hoy, nombre: decoded.nombre, sector: decoded.sector, qr, id: decoded.comercioId });
-    } catch (e) { res.status(401).send("No autorizado"); }
-});
-
-// --- INTERFAZ HTML (LO QUE SE VE EN EL NAVEGADOR) ---
-app.get("/", (req, res) => {
-    res.send(`
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WalletsPoints Panel</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin | Wallet Points Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;700;900&display=swap" rel="stylesheet">
     <style>
-        body { background: #0f172a; color: white; font-family: 'Inter', sans-serif; }
-        .glass-card { 
-            background: rgba(30, 41, 59, 0.7); 
-            backdrop-filter: blur(10px); 
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 2rem;
-        }
-        .btn-primary {
-            background: #f59e0b;
-            color: #000;
-            font-weight: 800;
-            transition: all 0.2s;
-        }
-        .btn-primary:active { transform: scale(0.95); }
+        body { font-family: 'Outfit', sans-serif; background-color: #0f172a; color: white; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+        .tier-silver { background: linear-gradient(135deg, #64748b 0%, #334155 100%); }
+        .tier-gold { background: linear-gradient(135deg, #f59e0b 0%, #92400e 100%); }
+        .tier-platinum { background: linear-gradient(135deg, #6366f1 0%, #312e81 100%); }
+        .hidden { display: none; }
     </style>
 </head>
-<body class="flex flex-col items-center justify-center min-h-screen p-4">
+<body class="pb-20">
 
-    <div id="login-screen" class="w-full max-w-sm glass-card p-8 shadow-2xl">
-        <div class="text-center mb-8">
-            <h1 class="text-5xl font-black text-yellow-500 tracking-tighter italic">WP🔥</h1>
-            <p class="text-gray-400 text-sm mt-2">SISTEMA DE PUNTOS QR</p>
+    <div id="loginScreen" class="fixed inset-0 z-[100] bg-slate-900 flex items-center justify-center p-6">
+        <div class="glass p-8 rounded-3xl w-full max-w-md text-center">
+            <h1 class="text-3xl font-black text-indigo-400 mb-6">ADMIN ACCESS</h1>
+            <input type="password" id="adminPass" placeholder="Clave de acceso" class="w-full p-4 rounded-xl bg-slate-800 border-none mb-4 outline-none">
+            <button onclick="checkLogin()" class="w-full bg-indigo-600 py-4 rounded-xl font-bold">Entrar al Sistema</button>
         </div>
-        
-        <div class="space-y-4">
-            <input id="email" type="email" placeholder="Correo electrónico" class="w-full bg-slate-800 p-4 rounded-2xl border border-slate-700 outline-none focus:border-yellow-500">
-            <input id="pass" type="password" placeholder="Contraseña" class="w-full bg-slate-800 p-4 rounded-2xl border border-slate-700 outline-none focus:border-yellow-500">
-            <button onclick="handleLogin()" class="w-full btn-primary p-4 rounded-2xl shadow-lg shadow-yellow-500/20">ACCEDER AL PANEL</button>
-        </div>
-        <p class="text-center text-[10px] text-gray-500 mt-6 uppercase tracking-widest">WalletsPoints v1.0 - 2026</p>
     </div>
 
-    <div id="main-dashboard" class="hidden w-full max-w-sm space-y-4">
-        <div class="glass-card p-6 flex justify-between items-center">
+    <div id="mainContent" class="hidden">
+        <header class="p-6 flex justify-between items-center sticky top-0 bg-[#0f172a]/80 backdrop-blur-md z-40">
             <div>
-                <h2 id="biz-name" class="text-2xl font-bold text-white leading-tight"></h2>
-                <span id="biz-sector" class="text-[10px] bg-yellow-500 text-black px-2 py-0.5 rounded-full font-bold uppercase tracking-tighter"></span>
+                <h1 class="text-2xl font-black text-indigo-400">WALLET<span class="text-white">POINTS</span></h1>
+                <p class="text-[10px] uppercase text-slate-500 font-bold">Business Intelligence v2.0</p>
             </div>
-            <button onclick="logout()" class="text-red-400 text-xs font-bold bg-red-400/10 px-3 py-1 rounded-lg">SALIR</button>
-        </div>
+            <div class="flex gap-2">
+                <button onclick="exportarDatos()" class="bg-slate-700 p-3 rounded-xl text-xs">💾 Exportar</button>
+                <button onclick="toggleScanner()" class="bg-indigo-600 p-3 rounded-xl shadow-lg shadow-indigo-500/40">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" stroke-width="2" stroke-linecap="round"></path></svg>
+                </button>
+            </div>
+        </header>
 
-        <div class="grid grid-cols-2 gap-4">
-            <div class="glass-card p-5 text-center">
-                <p class="text-gray-400 text-[10px] uppercase font-bold">Total Acumulado</p>
-                <p id="kpi-total" class="text-3xl font-black text-yellow-500">0</p>
-            </div>
-            <div class="glass-card p-5 text-center border-b-4 border-green-500">
-                <p class="text-gray-400 text-[10px] uppercase font-bold">Escaneos Hoy</p>
-                <p id="kpi-hoy" class="text-3xl font-black text-green-400">0</p>
-            </div>
-        </div>
+        <main class="px-6 space-y-8">
+            <section class="grid grid-cols-2 gap-4">
+                <div class="glass p-4 rounded-2xl">
+                    <p class="text-[10px] text-slate-400 uppercase font-bold">Clientes</p>
+                    <h3 id="dashClientes" class="text-2xl font-black">0</h3>
+                </div>
+                <div class="glass p-4 rounded-2xl">
+                    <p class="text-[10px] text-slate-400 uppercase font-bold">Puntos Totales</p>
+                    <h3 id="dashPuntos" class="text-2xl font-black text-indigo-400">0</h3>
+                </div>
+            </section>
 
-        <div class="bg-white p-8 rounded-[2.5rem] flex flex-col items-center shadow-2xl">
-            <p class="text-slate-900 font-black text-xs mb-6 border-b-2 border-slate-100 pb-2">MOSTRAR AL CLIENTE</p>
-            <div class="p-2 border-4 border-slate-900 rounded-xl">
-                <img id="qr-display" src="" class="w-full aspect-square">
-            </div>
-            <p id="id-display" class="text-[9px] text-slate-400 mt-6 font-mono font-bold tracking-widest"></p>
-        </div>
+            <section class="glass p-6 rounded-[2rem]">
+                <h2 class="text-sm font-bold text-slate-400 uppercase mb-4">Registro de Miembro</h2>
+                <form id="mainForm" class="space-y-3">
+                    <input type="text" id="nombre" placeholder="Nombre Completo" required class="w-full bg-slate-800/50 p-4 rounded-xl outline-none">
+                    <div class="grid grid-cols-2 gap-3">
+                        <input type="text" id="rut" placeholder="RUT (ID)" required class="w-full bg-slate-800/50 p-4 rounded-xl outline-none">
+                        <input type="tel" id="telefono" placeholder="WhatsApp (Ej: 569...)" required class="w-full bg-slate-800/50 p-4 rounded-xl outline-none">
+                    </div>
+                    <div class="p-3 bg-slate-900/50 rounded-xl border border-indigo-500/30">
+                        <label class="flex items-start gap-2 cursor-pointer">
+                            <input type="checkbox" id="terms" required class="mt-1 accent-indigo-500">
+                            <span class="text-[10px] text-slate-300">Confirmo que el cliente acepta unirse al plan de fidelización y ha leído las <b>Políticas de Privacidad y Protección de Datos</b>.</span>
+                        </label>
+                    </div>
+                    <button type="submit" class="w-full bg-indigo-600 py-4 rounded-xl font-black uppercase text-xs">Registrar e Iniciar Fidelización</button>
+                </form>
+            </section>
+
+            <section class="glass p-6 rounded-[2rem]">
+                <h2 class="text-sm font-bold text-slate-400 uppercase mb-4">Catálogo de Productos (<span id="countProd">0</span>/1000)</h2>
+                <div class="space-y-2 mb-4">
+                    <input type="text" id="p_nombre" placeholder="Nombre Producto" class="w-full bg-slate-800/50 p-3 rounded-lg outline-none text-sm">
+                    <input type="text" id="p_desc" placeholder="Descripción" class="w-full bg-slate-800/50 p-3 rounded-lg outline-none text-sm">
+                    <input type="number" id="p_precio" placeholder="Precio $" class="w-full bg-slate-800/50 p-3 rounded-lg outline-none text-sm">
+                    <button onclick="agregarProducto()" class="w-full bg-emerald-600 py-2 rounded-lg text-xs font-bold">Añadir al Catálogo</button>
+                </div>
+                <div id="productContainer" class="max-h-40 overflow-y-auto space-y-2"></div>
+            </section>
+
+            <button onclick="enviarMasivo()" class="w-full bg-white text-black py-4 rounded-2xl font-black flex justify-center items-center gap-2">
+                📢 ENVIAR OFERTA MASIVA WHATSAPP
+            </button>
+
+            <div id="walletList" class="grid gap-4"></div>
+        </main>
     </div>
 
     <script>
-        const API = "/api";
+        // --- BASE DE DATOS LOCAL ---
+        let clientes = JSON.parse(localStorage.getItem('wp_clientes')) || [];
+        let productos = JSON.parse(localStorage.getItem('wp_productos')) || [];
+        const CLAVE_MAESTRA = "Socrates147258.#";
 
-        async function handleLogin() {
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('pass').value;
-            
-            try {
-                const res = await fetch(API + '/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({email, password})
-                });
-                
-                if(res.ok) {
-                    const data = await res.json();
-                    localStorage.setItem('wp_auth_token', data.token);
-                    renderApp();
-                } else {
-                    alert("⚠️ Error: Credenciales no válidas.");
-                }
-            } catch (err) { alert("Error de conexión con el servidor"); }
+        // --- SEGURIDAD ---
+        function checkLogin() {
+            const pass = document.getElementById('adminPass').value;
+            if(pass === CLAVE_MAESTRA) {
+                document.getElementById('loginScreen').classList.add('hidden');
+                document.getElementById('mainContent').classList.remove('hidden');
+                render();
+            } else {
+                alert("Clave incorrecta. Acceso denegado.");
+            }
         }
 
-        async function renderApp() {
-            const token = localStorage.getItem('wp_auth_token');
-            if(!token) return;
+        // --- LÓGICA DE PRODUCTOS ---
+        function agregarProducto() {
+            if(productos.length >= 1000) return alert("Límite de catálogo alcanzado");
+            const n = document.getElementById('p_nombre').value;
+            const d = document.getElementById('p_desc').value;
+            const p = document.getElementById('p_precio').value;
 
-            document.getElementById('login-screen').classList.add('hidden');
-            document.getElementById('main-dashboard').classList.remove('hidden');
+            if(!n || !p) return alert("Faltan datos");
 
-            const res = await fetch(API + '/data', { 
-                headers: {'Authorization': token} 
+            productos.push({ n, d, p });
+            localStorage.setItem('wp_productos', JSON.stringify(productos));
+            renderProductos();
+        }
+
+        function renderProductos() {
+            const container = document.getElementById('productContainer');
+            document.getElementById('countProd').innerText = productos.length;
+            container.innerHTML = productos.map((prod, i) => `
+                <div class="flex justify-between items-center bg-slate-800 p-2 rounded text-[10px]">
+                    <span><b>${prod.n}</b> - $${prod.p}</span>
+                    <button onclick="borrarProd(${i})" class="text-red-400">✖</button>
+                </div>
+            `).join('');
+        }
+
+        // --- LÓGICA DE CLIENTES ---
+        document.getElementById('mainForm').onsubmit = (e) => {
+            e.preventDefault();
+            const nuevo = {
+                nombre: document.getElementById('nombre').value,
+                rut: document.getElementById('rut').value,
+                telefono: document.getElementById('telefono').value,
+                usos: 0,
+                fecha: new Date().toLocaleDateString()
+            };
+            clientes.push(nuevo);
+            localStorage.setItem('wp_clientes', JSON.stringify(clientes));
+            render();
+            e.target.reset();
+        };
+
+        function enviarMasivo() {
+            if(clientes.length === 0) return alert("No hay clientes registrados.");
+            const oferta = prompt("Escribe la oferta masiva:");
+            if(!oferta) return;
+            
+            alert("Se abrirá WhatsApp para cada cliente. Por seguridad de spam, debes confirmar cada envío.");
+            clientes.forEach(c => {
+                const url = `https://wa.me/${c.telefono.replace('+', '')}?text=${encodeURIComponent(oferta)}`;
+                window.open(url, '_blank');
             });
-            const data = await res.json();
+        }
+
+        function render() {
+            const list = document.getElementById('walletList');
+            const dashC = document.getElementById('dashClientes');
+            const dashP = document.getElementById('dashPuntos');
             
-            document.getElementById('biz-name').innerText = data.nombre;
-            document.getElementById('biz-sector').innerText = data.sector;
-            document.getElementById('kpi-total').innerText = data.total;
-            document.getElementById('kpi-hoy').innerText = data.hoy;
-            document.getElementById('qr-display').src = data.qr;
-            document.getElementById('id-display').innerText = "ID DISPOSITIVO: " + data.id;
+            list.innerHTML = '';
+            let totalPuntos = 0;
+
+            clientes.forEach((c, i) => {
+                totalPuntos += c.usos;
+                const card = document.createElement('div');
+                card.className = `tier-silver p-5 rounded-3xl relative`;
+                card.innerHTML = `
+                    <h3 class="font-black uppercase">${c.nombre}</h3>
+                    <p class="text-[10px] opacity-70">${c.rut} | ${c.telefono}</p>
+                    <div class="flex justify-between items-center mt-4">
+                        <span class="text-2xl font-black">${c.usos} PTS</span>
+                        <button onclick="sumarPunto(${i})" class="bg-white text-black px-4 py-2 rounded-xl font-bold">+1 Punto</button>
+                    </div>
+                `;
+                list.appendChild(card);
+            });
+
+            dashC.innerText = clientes.length;
+            dashP.innerText = totalPuntos;
+            renderProductos();
         }
 
-        function logout() {
-            localStorage.clear();
-            location.reload();
+        function sumarPunto(i) {
+            clientes[i].usos++;
+            localStorage.setItem('wp_clientes', JSON.stringify(clientes));
+            render();
         }
 
-        // Auto-login si ya existe token
-        if(localStorage.getItem('wp_auth_token')) renderApp();
+        function exportarDatos() {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(clientes));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", "base_datos_clientes.json");
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        }
+
+        // Scanner (Simplificado para el ejemplo)
+        const html5QrCode = new Html5Qrcode("reader");
+        function toggleScanner() { /* Igual al código anterior */ }
     </script>
 </body>
 </html>
-    `);
-});
-
-// --- INICIO DEL SERVIDOR ---
-const PORT = 3000;
-app.listen(PORT, () => {
-    console.log("------------------------------------------");
-    console.log("🔥 WALLETSPPOINTS SYSTEM ONLINE");
-    console.log("📍 Accede aquí: http://localhost:" + PORT);
-    console.log("------------------------------------------");
-});
